@@ -522,6 +522,7 @@ public class NetworkClient implements KafkaClient {
 
     /**
      * Do actual reads and writes to sockets.
+     * 翻译翻译，实际上network client poll方法是最实际的读写socket的方法
      *
      * @param timeout The maximum amount of time to wait (in ms) for responses if there are none immediately,
      *                must be non-negative. The actual timeout will be the minimum of timeout, request timeout and
@@ -542,8 +543,14 @@ public class NetworkClient implements KafkaClient {
             return responses;
         }
 
+        // 代码追进去好几层，总结一下就是
+        // 每次client.poll的时候，都会封装一个获取元数据的请求，把它先封装成clientRequest ，然后是inFlightRequest
+        // 暂时还不知道inFlightRequest是啥，干啥用的
+        // 也不晓得到了selector.send 后面又发生了啥，只需要知道，被客户端存起来了就行，此处并没有真正发送
         long metadataTimeout = metadataUpdater.maybeUpdate(now);
         try {
+
+            // 这里也暂时不晓得啥意思，kafka 的网络方面还没看，只需要知道，发了就行
             this.selector.poll(Utils.min(timeout, metadataTimeout, defaultRequestTimeoutMs));
         } catch (IOException e) {
             log.error("Unexpected error during I/O", e);

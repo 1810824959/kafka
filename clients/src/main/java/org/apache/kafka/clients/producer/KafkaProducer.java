@@ -424,6 +424,8 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
                         logContext,
                         clusterResourceListeners,
                         Time.SYSTEM);
+                // 再回首，这个地方初始化，其实啥也没干，并没有真正的更新元数据
+                // 只是把needFullUpdate 置为true，version+1
                 this.metadata.bootstrap(addresses);
             }
             this.errors = this.metrics.sensor("errors");
@@ -888,6 +890,8 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
             long nowMs = time.milliseconds();
             ClusterAndWaitTime clusterAndWaitTime;
             try {
+
+                // 发送的第一个步骤，获取元数据，毕竟要知道，发到哪里，哪个node
                 clusterAndWaitTime = waitOnMetadata(record.topic(), record.partition(), nowMs, maxBlockTimeMs);
             } catch (KafkaException e) {
                 if (metadata.isClosed())
@@ -897,6 +901,8 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
             nowMs += clusterAndWaitTime.waitedOnMetadataMs;
             long remainingWaitMs = Math.max(0, maxBlockTimeMs - clusterAndWaitTime.waitedOnMetadataMs);
             Cluster cluster = clusterAndWaitTime.cluster;
+
+            // 2. key , value 序列化
             byte[] serializedKey;
             try {
                 serializedKey = keySerializer.serialize(record.topic(), record.headers(), record.key());
@@ -913,12 +919,15 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
                         " to class " + producerConfig.getClass(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG).getName() +
                         " specified in value.serializer", cce);
             }
+
+            // 3. 计算分区
             int partition = partition(record, serializedKey, serializedValue, cluster);
             tp = new TopicPartition(record.topic(), partition);
 
             setReadOnly(record.headers());
             Header[] headers = record.headers().toArray();
 
+            // 4. 估算消息的大小，校验消息的大小
             int serializedSize = AbstractRecords.estimateSizeInBytesUpperBound(apiVersions.maxUsableProduceMagic(),
                     compressionType, serializedKey, serializedValue, headers);
             ensureValidRecordSize(serializedSize);
@@ -926,12 +935,16 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
             if (log.isTraceEnabled()) {
                 log.trace("Attempting to append record {} with callback {} to topic {} partition {}", record, callback, record.topic(), partition);
             }
+
+            // 5. 加上回调
             // producer callback will make sure to call both 'callback' and interceptor callback
             Callback interceptCallback = new InterceptorCallback<>(callback, this.interceptors, tp);
 
             if (transactionManager != null && transactionManager.isTransactional()) {
                 transactionManager.failIfNotReadyForSend();
             }
+
+            // 6. 丢到accumulator 里面
             RecordAccumulator.RecordAppendResult result = accumulator.append(tp, timestamp, serializedKey,
                     serializedValue, headers, interceptCallback, remainingWaitMs, true, nowMs);
 
@@ -955,6 +968,8 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
 
             if (result.batchIsFull || result.newBatchCreated) {
                 log.trace("Waking up the sender since topic {} partition {} is either full or getting a new batch", record.topic(), partition);
+
+                // 最后一步，唤醒sender
                 this.sender.wakeup();
             }
             return result.future;
@@ -1027,8 +1042,12 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
             }
             metadata.add(topic, nowMs + elapsed);
             int version = metadata.requestUpdateForTopic(topic);
+
+            // 之前分析的没错，其实就是再次唤醒了sender，然后sender发了一个请求，在reponse中，更新了元数据，并且updateversion+1
             sender.wakeup();
             try {
+
+                // 这里就是把更新前的version传进去，因为 updateversion 会被reponse异步更新，等到版本号大于传进去的上次的版本号，就可以了
                 metadata.awaitUpdate(version, remainingWaitMs);
             } catch (TimeoutException ex) {
                 // Rethrow with original maxWaitMs to prevent logging exception with remainingWaitMs
@@ -1057,10 +1076,12 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
      * Validate that the record size isn't too large
      */
     private void ensureValidRecordSize(int size) {
+        // 1M
         if (size > maxRequestSize)
             throw new RecordTooLargeException("The message is " + size +
                     " bytes when serialized which is larger than " + maxRequestSize + ", which is the value of the " +
                     ProducerConfig.MAX_REQUEST_SIZE_CONFIG + " configuration.");
+        // 32M
         if (size > totalMemorySize)
             throw new RecordTooLargeException("The message is " + size +
                     " bytes when serialized which is larger than the total memory buffer you have configured with the " +
