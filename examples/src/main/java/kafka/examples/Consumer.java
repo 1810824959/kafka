@@ -45,17 +45,42 @@ public class Consumer extends ShutdownableThread {
         super("KafkaConsumerExample", false);
         this.groupId = groupId;
         Properties props = new Properties();
+
+        // broker的地址
         props.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, KafkaProperties.KAFKA_SERVER_URL + ":" + KafkaProperties.KAFKA_SERVER_PORT);
+        // group id ? 不指定会怎么办？
         props.put(ConsumerConfig.GROUP_ID_CONFIG, groupId);
+
+        // group instance id 消费者实例id
+        /**
+         * A unique identifier of the consumer instance provided by end user.
+         * Only non-empty strings are permitted.
+         * If set, the consumer is treated as a static member
+         * which means that only one instance with this ID is allowed in the consumer group at any time.
+         * This can be used in combination with a larger session timeout to avoid group rebalances
+         * caused by transient unavailability (e.g. process restarts).
+         * If not set, the consumer will join the group as a dynamic member, which is the traditional behavior.
+         */
+        // 静态消费组成员，不会因为超时，频繁触发 rebalance
         instanceId.ifPresent(id -> props.put(ConsumerConfig.GROUP_INSTANCE_ID_CONFIG, id));
+
+        // offset 是否自动提交
         props.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "true");
+        // 配合上面一个配置， 默认多少时间自动提交一次
         props.put(ConsumerConfig.AUTO_COMMIT_INTERVAL_MS_CONFIG, "1000");
+
+        // 会话超时时长，consumer挂掉了
         props.put(ConsumerConfig.SESSION_TIMEOUT_MS_CONFIG, "30000");
+        // key/value 的反序列化类
         props.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.IntegerDeserializer");
         props.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.StringDeserializer");
+
+        // 读已提交，事务的隔离级别
         if (readCommitted) {
             props.put(ConsumerConfig.ISOLATION_LEVEL_CONFIG, "read_committed");
         }
+        //重置消费偏移量策略
+        //当偏移量没有初始值时或者参数非法时，比如数据被删除时的重置策略
         props.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
 
         consumer = new KafkaConsumer<>(props);
